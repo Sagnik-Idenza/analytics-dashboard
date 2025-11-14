@@ -9,7 +9,7 @@ export default function ThreeDSAnalytics({ data, loading }) {
   if (!data) return null;
 
   return (
-    <ChartCard title="3DS Authentication Summary" loading={loading}>
+    <ChartCard title="🛡️ 3DS Authentication Summary" loading={loading}>
       <ResponsiveContainer width="100%" height={300}>
         <PieChart>
           <Pie
