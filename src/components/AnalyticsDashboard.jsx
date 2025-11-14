@@ -25,67 +25,67 @@ export default function AnalyticsDashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const fetchData = async (endpoint) => {
+  // ------------------------------
+  // UNIVERSAL JSON FETCHER
+  // ------------------------------
+  const fetchJSON = async (url) => {
     try {
-      const url = `${API_BASE}/${endpoint}?subscriber_id=${SUBSCRIBER_ID}&exclude_dev=${EXCLUDE_DEV}`;
       const response = await fetch(url);
       return await response.json();
-    } catch (error) {
-      console.error(`Error fetching ${endpoint}:`, error);
-      return null;
-    }
-  };
-
-  const fetch3dsSummary = async () => {
-    try {
-      const url = `${API_BASE}/3ds-summary?subscriber_id=${SUBSCRIBER_ID}&exclude_dev=${EXCLUDE_DEV}`;
-      console.log("FETCH 3DS URL:", url);
-
-      const response = await fetch(url);
-      const json = await response.json();
-
-      console.log("FETCH 3DS RAW RESPONSE:", json);
-
-      return json;
     } catch (err) {
-      console.error("Error fetching 3DS summary:", err);
+      console.error(`Fetch failed: ${url}`, err);
       return null;
     }
   };
 
+  // ------------------------------
+  // FETCHERS
+  // ------------------------------
+  const fetchData = (endpoint) => {
+    const url = `${API_BASE}/${endpoint}?subscriber_id=${SUBSCRIBER_ID}&exclude_dev=${EXCLUDE_DEV}`;
+    return fetchJSON(url);
+  };
+
+  const fetchRiskSummary = () => {
+    const url = `${API_BASE}/case-risk-summary?subscriber_id=${SUBSCRIBER_ID}&exclude_dev=${EXCLUDE_DEV}`;
+    return fetchJSON(url);
+  };
+
+  const fetch3dsSummary = () => {
+    const url = `${API_BASE}/3ds-summary?subscriber_id=${SUBSCRIBER_ID}&exclude_dev=${EXCLUDE_DEV}`;
+    console.log("FETCH 3DS URL:", url);
+    return fetchJSON(url);
+  };
+
+  // ------------------------------
+  // UPDATED PROCESSORS (NO GRAFANA FORMAT)
+  // ------------------------------
   const process3dsSummary = (data) => {
     console.log("PROCESSING 3DS:", data);
 
-    if (!data?.rows) {
-      console.warn("3DS Summary missing rows");
+    if (!data?.data) {
+      console.warn("3DS Summary missing data");
       return null;
     }
 
-    return data.rows.map(([level, count]) => ({
-      name: level.toUpperCase(),
-      value: count,
+    return data.data.map((entry) => ({
+      name: entry.level?.toUpperCase(),
+      value: entry.count,
     }));
-  };
-
-  const fetchRiskSummary = async () => {
-    try {
-      const url = `${API_BASE}/case-risk-summary?subscriber_id=${SUBSCRIBER_ID}&exclude_dev=${EXCLUDE_DEV}`;
-      const response = await fetch(url);
-      return await response.json();
-    } catch (err) {
-      console.error("Error fetching case-risk-summary:", err);
-      return null;
-    }
   };
 
   const processRiskSummary = (data) => {
-    if (!data?.rows) return null;
-    return data.rows.map(([risk, count]) => ({
-      name: risk.toUpperCase(),
-      value: count,
+    if (!data?.data) return null;
+
+    return data.data.map((entry) => ({
+      name: entry.risk_level?.toUpperCase(),
+      value: entry.count,
     }));
   };
 
+  // ------------------------------
+  // EXISTING PROCESSORS
+  // ------------------------------
   const processVampData = (data) => {
     if (!data?.data?.data?.[0]) return null;
     const row = data.data.data[0];
@@ -136,6 +136,7 @@ export default function AnalyticsDashboard() {
 
   const processLatencyData = (data) => {
     if (!data?.data?.data) return null;
+
     const rows = data.data.data;
 
     const latencies = rows.map((row) => parseFloat(row[4]));
@@ -146,7 +147,9 @@ export default function AnalyticsDashboard() {
       minimum: Math.min(...latencies),
     };
 
-    const chartData = rows.slice(0, 15).map((row) => ({
+    // FIX: add index for stable X-axis
+    const chartData = rows.slice(0, 15).map((row, index) => ({
+      index, // NEW
       order_key: row[1].slice(-8),
       minutes: parseFloat(row[4]),
     }));
@@ -154,10 +157,13 @@ export default function AnalyticsDashboard() {
     return { stats, chartData };
   };
 
+  // ------------------------------
+  // LOAD ALL DATA
+  // ------------------------------
   const loadAllData = async () => {
     setLoading(true);
 
-    const [vamp, orders, latency, riskSummary, three_ds] = await Promise.all([
+    const [vamp, orders, latency, riskSummary, threeDS] = await Promise.all([
       fetchData("vamp"),
       fetchData("orders"),
       fetchData("latency"),
@@ -169,12 +175,15 @@ export default function AnalyticsDashboard() {
     setOrdersData(processOrdersData(orders));
     setLatencyData(processLatencyData(latency));
     setRiskSummaryData(processRiskSummary(riskSummary));
-    setThreeDSData(process3dsSummary(three_ds));
+    setThreeDSData(process3dsSummary(threeDS));
 
     setLastUpdated(new Date());
     setLoading(false);
   };
 
+  // ------------------------------
+  // EFFECT HOOKS
+  // ------------------------------
   useEffect(() => {
     loadAllData();
   }, []);
@@ -185,6 +194,7 @@ export default function AnalyticsDashboard() {
     return () => clearInterval(interval);
   }, [autoRefresh]);
 
+  // ------------------------------
   const SpinnerWrapper = () => (
     <div className="text-center py-4">
       <Spinner animation="border" variant="primary" />

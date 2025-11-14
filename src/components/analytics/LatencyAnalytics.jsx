@@ -27,7 +27,7 @@ const LatencyAnalytics = ({ data, loading }) => {
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={data.chartData}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="order_key" />
+              <XAxis dataKey="index" />
               <YAxis />
               <Tooltip />
               <Legend />
