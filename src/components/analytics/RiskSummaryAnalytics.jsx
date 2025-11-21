@@ -23,7 +23,7 @@ const DEFAULT_COLORS = ["#EF4444", "#F59E0B", "#10B981", "#9CA3AF"];
 const renderLabel = (props) => {
   const { name, value, percent } = props;
   if (!value) return null;
-  const pct = (percent * 100).toFixed(0);
+  const pct = (percent * 100).toFixed(2);
   return `${name} (${pct}%)`;
 };
 

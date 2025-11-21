@@ -10,9 +10,9 @@ import ThreeDSAnalytics from "./analytics/ThreeDSAnalytics";
 import { BinDistribution } from "./analytics/BinDistributionAnalytics";
 import { RuleFrequency } from "./analytics/RuleFrequencyAnalytics";
 
-// const DEFAULT_API_BASE = "http://localhost:8080/analytics";
-const DEFAULT_API_BASE = "https://coral-app-2-4y6qg.ondigitalocean.app/analytics";
-const DEFAULT_SUBSCRIBER_ID = 12;
+const DEFAULT_API_BASE = "http://localhost:8080/analytics";
+// const DEFAULT_API_BASE = "https://coral-app-2-4y6qg.ondigitalocean.app/analytics";
+const DEFAULT_SUBSCRIBER_ID = 1;
 const EXCLUDE_DEV = false;
 const REFRESH_INTERVAL = 960000;
 
