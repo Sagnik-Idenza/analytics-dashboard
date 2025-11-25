@@ -19,12 +19,40 @@ const COLOR_MAP = {
 
 const DEFAULT_COLORS = ["#3B82F6", "#10B981", "#F97316", "#6366F1", "#9CA3AF"];
 
-// Label inside donut slices: "Force 3DS (25%)"
-const renderLabel = (props) => {
-  const { name, value, percent } = props;
-  if (!value) return null;
-  const pct = (percent * 100).toFixed(2);
-  return `${name} (${pct}%)`;
+// Correct label that uses BACKEND percent, not Recharts internal percent
+const renderLabel = ({ name, payload }) => {
+  const pct = payload?.percent;
+  if (pct == null) return null;
+  return `${name} (${pct.toFixed(2)}%)`;
+};
+
+// Custom tooltip showing backend counts + percent
+const CustomTooltip = ({ active, payload }) => {
+  if (!active || !payload || !payload.length) return null;
+
+  const data = payload[0].payload;
+  if (!data) return null;
+
+  const value = data.value || 0;
+  const pct = data.percent != null ? data.percent.toFixed(2) : "0.00";
+
+  return (
+    <div
+      style={{
+        background: "white",
+        border: "1px solid #e5e7eb",
+        padding: 8,
+        fontSize: 12,
+        color: "#111827",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
+        borderRadius: 4,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{data.name}</div>
+      <div>{`${value} events`}</div>
+      <div style={{ color: "#6b7280" }}>{`${pct}%`}</div>
+    </div>
+  );
 };
 
 const ThreeDSAnalytics = ({ data, loading }) => {
@@ -48,7 +76,6 @@ const ThreeDSAnalytics = ({ data, loading }) => {
     );
   }
 
-  // Total count for tooltips / percentages
   const total = data.reduce((sum, d) => sum + (d.value || 0), 0);
 
   return (
@@ -92,15 +119,7 @@ const ThreeDSAnalytics = ({ data, loading }) => {
                 })}
               </Pie>
 
-              <Tooltip
-                formatter={(value, name) => [
-                  `${value} events`,
-                  name,
-                ]}
-                contentStyle={{
-                  fontSize: 12,
-                }}
-              />
+              <Tooltip content={<CustomTooltip />} />
 
               <Legend
                 verticalAlign="bottom"

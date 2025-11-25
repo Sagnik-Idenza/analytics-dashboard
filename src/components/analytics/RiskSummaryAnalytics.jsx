@@ -19,12 +19,37 @@ const RISK_COLOR_MAP = {
 
 const DEFAULT_COLORS = ["#EF4444", "#F59E0B", "#10B981", "#9CA3AF"];
 
-// Label inside donut slices: "HIGH (25%)"
-const renderLabel = (props) => {
-  const { name, value, percent } = props;
-  if (!value) return null;
-  const pct = (percent * 100).toFixed(2);
-  return `${name} (${pct}%)`;
+// Label using BACKEND percent, not Recharts' internal percent
+const renderLabel = ({ name, payload }) => {
+  const pct = payload?.percent;
+  if (pct == null) return null;
+  return `${name} (${pct.toFixed(2)}%)`;
+};
+
+// Custom tooltip
+const CustomTooltip = ({ active, payload }) => {
+  if (!active || !payload || !payload.length) return null;
+
+  const row = payload[0].payload;
+  const pct = row.percent != null ? row.percent.toFixed(2) : "0.00";
+
+  return (
+    <div
+      style={{
+        background: "white",
+        border: "1px solid #e5e7eb",
+        padding: 8,
+        fontSize: 12,
+        borderRadius: 4,
+        color: "#111827",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{row.name}</div>
+      <div>{`${row.value} cases`}</div>
+      <div style={{ color: "#6b7280" }}>{`${pct}%`}</div>
+    </div>
+  );
 };
 
 const RiskSummaryAnalytics = ({ data, loading }) => {
@@ -54,7 +79,7 @@ const RiskSummaryAnalytics = ({ data, loading }) => {
     );
   }
 
-  // Normalize names and compute total
+  // Normalize names + use backend percent + count
   const normalized = data.map((d) => {
     const raw = (d.name || "").toString().toUpperCase();
     const name =
@@ -66,10 +91,14 @@ const RiskSummaryAnalytics = ({ data, loading }) => {
         ? "LOW"
         : "UNKNOWN";
 
-    return { name, value: Number(d.value || 0) };
+    return {
+      name,
+      value: Number(d.value || 0),
+      percent: d.percent != null ? Number(d.percent) : 0,
+    };
   });
 
-  const total = normalized.reduce((sum, d) => sum + (d.value || 0), 0);
+  const total = normalized.reduce((sum, d) => sum + d.value, 0);
 
   return (
     <Card className="border-0 shadow-sm">
@@ -112,30 +141,21 @@ const RiskSummaryAnalytics = ({ data, loading }) => {
                 data={normalized}
                 dataKey="value"
                 nameKey="name"
-                innerRadius="45%"   // donut style to match 3DS
+                innerRadius="45%"
                 outerRadius="80%"
                 paddingAngle={2}
                 labelLine={false}
                 label={renderLabel}
               >
                 {normalized.map((entry, index) => {
-                  const name = entry.name || "";
                   const color =
-                    RISK_COLOR_MAP[name] ||
+                    RISK_COLOR_MAP[entry.name] ||
                     DEFAULT_COLORS[index % DEFAULT_COLORS.length];
                   return <Cell key={`cell-${index}`} fill={color} />;
                 })}
               </Pie>
 
-              <Tooltip
-                formatter={(value, name) => [
-                  `${value} cases`,
-                  name,
-                ]}
-                contentStyle={{
-                  fontSize: 12,
-                }}
-              />
+              <Tooltip content={<CustomTooltip />} />
 
               <Legend
                 verticalAlign="bottom"

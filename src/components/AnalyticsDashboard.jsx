@@ -10,7 +10,7 @@ import ThreeDSAnalytics from "./analytics/ThreeDSAnalytics";
 import { BinDistribution } from "./analytics/BinDistributionAnalytics";
 import { RuleFrequency } from "./analytics/RuleFrequencyAnalytics";
 
-const DEFAULT_API_BASE = "http://localhost:8080/analytics";
+const DEFAULT_API_BASE = "http://159.89.39.60:8080/analytics";
 // const DEFAULT_API_BASE = "https://coral-app-2-4y6qg.ondigitalocean.app/analytics";
 const DEFAULT_SUBSCRIBER_ID = 1;
 const EXCLUDE_DEV = false;
@@ -91,7 +91,6 @@ const KpiCard = ({ label, value, sublabel, icon, accent }) => (
   </div>
 );
 
-
 // Convert minutes → nice string (ms / sec / min)
 const formatLatencyFromMinutes = (valueInMinutes) => {
   const v = Number(valueInMinutes);
@@ -143,80 +142,29 @@ function bucketThreeDSLevel(raw) {
 }
 
 // Generic normalizer: handle Grafana-style and object-list responses
-function normalizeLevelCountRows(
-  raw,
-  levelFieldCandidates,
-  countFieldCandidates
-) {
-  if (!raw) return [];
+export const normalizeLevelCountRows = (result, levelKeys, valueKeys) => {
+  if (!result || !result.data) return [];
 
-  // Case 1: object list — { data: [ { level: "Frictionless", count: 10 }, ... ] }
-  if (
-    Array.isArray(raw.data) &&
-    raw.data.length > 0 &&
-    typeof raw.data[0] === "object"
-  ) {
-    return raw.data.map((entry) => {
-      const levelField = levelFieldCandidates.find((k) => k in entry);
-      const countField = countFieldCandidates.find((k) => k in entry);
-      return {
-        level: levelField ? entry[levelField] : null,
-        count: Number(countField ? entry[countField] : 0),
-      };
-    });
-  }
+  return result.data.map((row) => {
+    const level = row[levelKeys[0]] ?? row[levelKeys[1]] ?? null;
 
-  // Case 2: Grafana-style at root — { columns: [...], data: [[...], ...] }
-  if (
-    Array.isArray(raw.columns) &&
-    Array.isArray(raw.data) &&
-    raw.data.length > 0 &&
-    Array.isArray(raw.data[0])
-  ) {
-    const cols = raw.columns;
-    const rows = raw.data;
-    const levelIdx = levelFieldCandidates
-      .map((k) => cols.indexOf(k))
-      .find((idx) => idx !== -1);
-    const countIdx = countFieldCandidates
-      .map((k) => cols.indexOf(k))
-      .find((idx) => idx !== -1);
+    const count = row[valueKeys[0]] ?? 0;
 
-    if (levelIdx == null || countIdx == null) return [];
+    // FIX: preserve backend percent field
+    const percent =
+      row[valueKeys[1]] !== undefined
+        ? Number(row[valueKeys[1]])
+        : row.percent !== undefined
+        ? Number(row.percent)
+        : null;
 
-    return rows.map((row) => ({
-      level: row[levelIdx],
-      count: Number(row[countIdx] || 0),
-    }));
-  }
-
-  // Case 3: Grafana-style nested — { data: { columns: [...], data: [[...], ...] } }
-  if (
-    raw.data &&
-    Array.isArray(raw.data.columns) &&
-    Array.isArray(raw.data.data) &&
-    raw.data.data.length > 0 &&
-    Array.isArray(raw.data.data[0])
-  ) {
-    const cols = raw.data.columns;
-    const rows = raw.data.data;
-    const levelIdx = levelFieldCandidates
-      .map((k) => cols.indexOf(k))
-      .find((idx) => idx !== -1);
-    const countIdx = countFieldCandidates
-      .map((k) => cols.indexOf(k))
-      .find((idx) => idx !== -1);
-
-    if (levelIdx == null || countIdx == null) return [];
-
-    return rows.map((row) => ({
-      level: row[levelIdx],
-      count: Number(row[countIdx] || 0),
-    }));
-  }
-
-  return [];
-}
+    return {
+      level,
+      count,
+      percent,
+    };
+  });
+};
 
 export default function AnalyticsDashboard({
   apiBase = DEFAULT_API_BASE,
@@ -293,16 +241,19 @@ export default function AnalyticsDashboard({
 
   // risk_level_counts
   const processRiskSummary = (result) => {
+    // normalize: include percent!
     const rows = normalizeLevelCountRows(
       result,
-      ["risk_level", "level"],
-      ["count"]
+      ["risk_level", "label", "level"], // support multiple possible keys
+      ["count", "percent"]
     );
+
     if (!rows.length) return [];
 
-    return rows.map(({ level, count }) => ({
+    return rows.map(({ level, count, percent }) => ({
       name: (level || "UNKNOWN").toString().toUpperCase(),
       value: count,
+      percent: percent != null ? Number(percent.toFixed(2)) : 0,
     }));
   };
 
@@ -334,55 +285,51 @@ export default function AnalyticsDashboard({
 
   const process3dsSummary = (result) => {
     console.log("PROCESSING 3DS RAW:", result);
-  
-    // Normalize result into [{ level, count }]
+
+    // Normalize raw data → include percent!
     const rows = normalizeLevelCountRows(
       result,
-      ["level", "three_ds"], // raw level field
-      ["count"]              // count field
+      ["level", "three_ds"],
+      ["count", "percent"]
     );
-  
+
     if (!rows.length) {
       console.warn("No 3DS rows after normalization");
       return [];
     }
-  
-    // Group raw levels into friendly buckets
+
     const buckets = {
-      "Force 3DS": 0,
-      "Prefer 3DS": 0,
-      "Bypass 3DS": 0,
-      "Other 3DS": 0,
+      "Force 3DS": { value: 0, percent: 0 },
+      "Prefer 3DS": { value: 0, percent: 0 },
+      "Bypass 3DS": { value: 0, percent: 0 },
+      "Other 3DS": { value: 0, percent: 0 },
     };
-  
-    rows.forEach(({ level, count }) => {
-      const raw = (level || "").toString().toUpperCase();
-      const value = Number(count) || 0;
-  
+
+    rows.forEach(({ level, count, percent }) => {
+      const lvl = (level || "").toUpperCase();
+      const val = Number(count) || 0;
+      const pct = Number(percent) || 0;
+
       let key;
-  
-      if (raw === "FORCE" || raw === "FORCE_ON") {
-        key = "Force 3DS";
-      } else if (raw === "ATTEMPT" || raw === "PREFER_ON") {
-        key = "Prefer 3DS";
-      } else if (raw === "BYPASS" || raw === "BYPASS_ON") {
-        key = "Bypass 3DS";
-      } else {
-        key = "Other 3DS"; // ATTEMPT, UNKNOWN, etc.
-      }
-  
-      buckets[key] += value;
+
+      if (lvl === "FORCE" || lvl === "FORCE_ON") key = "Force 3DS";
+      else if (lvl === "PREFER_ON" || lvl === "ATTEMPT") key = "Prefer 3DS";
+      else if (lvl === "BYPASS" || lvl === "BYPASS_ON") key = "Bypass 3DS";
+      else key = "Other 3DS";
+
+      buckets[key].value += val;
+      buckets[key].percent += pct;
     });
-  
-    const clean = Object.entries(buckets)
-      .filter(([, value]) => value > 0)
-      .map(([name, value]) => ({ name, value }));
-  
-    console.log("PROCESSING 3DS (grouped):", clean);
-  
-    return clean;
+
+    return Object.entries(buckets)
+      .filter(([_, obj]) => obj.value > 0)
+      .map(([name, obj]) => ({
+        name,
+        value: obj.value,
+        percent: Number(obj.percent.toFixed(2)), // KEEP PERCENT
+      }));
   };
-  
+
   const processVampData = (data) => {
     if (!data?.data?.data?.[0]) return null;
     const row = data.data.data[0];
@@ -398,37 +345,12 @@ export default function AnalyticsDashboard({
     };
   };
 
-  const processOrdersData = (data) => {
-    if (!data?.data?.data) return null;
-    const rows = data.data.data;
+  const processOrdersData = (apiResponse) => {
+    if (!apiResponse?.data) return null;
 
-    const totals = {
-      deposited: rows.reduce((sum, row) => sum + parseFloat(row[3] || 0), 0),
-      refunded: rows.reduce((sum, row) => sum + parseFloat(row[4] || 0), 0),
-      withdrawn: rows.reduce((sum, row) => sum + parseFloat(row[5] || 0), 0),
+    return {
+      currencies: apiResponse.data,
     };
-
-    const counts = {
-      deposits: rows.reduce((sum, row) => sum + (row[6] || 0), 0),
-      refunds: rows.reduce((sum, row) => sum + (row[7] || 0), 0),
-      withdrawals: rows.reduce((sum, row) => sum + (row[8] || 0), 0),
-    };
-
-    const chartData = [
-      { name: "Deposited", value: totals.deposited },
-      { name: "Refunded", value: totals.refunded },
-      { name: "Withdrawn", value: totals.withdrawn },
-    ];
-
-    const recentOrders = rows.slice(0, 10).map((row) => ({
-      order_key: row[0],
-      scoring: parseFloat(row[2] || 0),
-      deposited: parseFloat(row[3] || 0),
-      refunded: parseFloat(row[4] || 0),
-      timestamp: row[9],
-    }));
-
-    return { totals, counts, chartData, recentOrders };
   };
 
   const processLatencyData = (data) => {
@@ -546,15 +468,15 @@ export default function AnalyticsDashboard({
     let isRunning = false;
 
     const runRefresh = async () => {
-      if (isRunning) return; // prevent double triggers
+      if (isRunning) return;
       isRunning = true;
 
       console.log("🔥 Auto refresh triggered");
 
       try {
         console.log("📡 Calling refresh MV endpoint...");
-        await refreshMaterializedView(); // refresh the MV
-        await loadAllData(); // reload dashboard
+        await refreshMaterializedView();
+        await loadAllData();
         console.log("✅ Auto refresh complete");
       } catch (err) {
         console.error("❌ Auto refresh error:", err);
@@ -563,8 +485,8 @@ export default function AnalyticsDashboard({
       isRunning = false;
     };
 
-    // Run once immediately when toggled ON
-    runRefresh();
+    // ❌ DO NOT run immediately — causes double-loading with initial load
+    // runRefresh();
 
     const interval = setInterval(runRefresh, REFRESH_INTERVAL);
 
@@ -601,10 +523,7 @@ export default function AnalyticsDashboard({
   // Force 3DS Rate: "Force 3DS" / all 3DS policy/outcome rows
   let force3dsRate = "-";
   if (threeDSData && threeDSData.length > 0) {
-    const total = threeDSData.reduce(
-      (sum, d) => sum + (d.value || 0),
-      0
-    );
+    const total = threeDSData.reduce((sum, d) => sum + (d.value || 0), 0);
     const force = threeDSData
       .filter((d) => d.name === "Force 3DS")
       .reduce((sum, d) => sum + (d.value || 0), 0);
@@ -613,7 +532,6 @@ export default function AnalyticsDashboard({
       force3dsRate = `${((force / total) * 100).toFixed(1)}%`;
     }
   }
-
 
   const avgLatency =
     latencyData &&
@@ -637,139 +555,134 @@ export default function AnalyticsDashboard({
       }}
     >
       {/* ===== Top Header ===== */}
-      {/* ===== Top Header ===== */}
-{/* ===== Top Header ===== */}
-<header
-  style={{
-    background: "linear-gradient(90deg, #3B82F6, #60A5FA)", // clean bright blue
-    padding: "16px 24px",
-    color: "#FFF",
-    marginBottom: "16px",
-    borderRadius: "10px",
-    boxShadow: "0 3px 12px rgba(0,0,0,0.15)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "18px",
-  }}
->
-  {/* Left: Logo + Title + Tagline */}
-  <div style={{ display: "flex", flexDirection: "column" }}>
-    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-      {/* Idenza logo */}
-      <img
-        src="/assets/idenza_logo.png"
-        alt="Idenza Logo"
+      <header
         style={{
-          width: 40,
-          height: 40,
-          objectFit: "contain",
-          borderRadius: "6px",
-        }}
-      />
-
-      <h2
-        style={{
-          margin: 0,
-          fontSize: 21,
-          fontWeight: 700,
-          letterSpacing: "0.01em",
+          background: "linear-gradient(90deg, #3B82F6, #60A5FA)", // clean bright blue
+          padding: "16px 24px",
+          color: "#FFF",
+          marginBottom: "16px",
+          borderRadius: "10px",
+          boxShadow: "0 3px 12px rgba(0,0,0,0.15)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "18px",
         }}
       >
-        Idenza Risk &amp; Payments Command Center
-      </h2>
-    </div>
+        {/* Left: Logo + Title + Tagline */}
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {/* Idenza logo */}
+            <img
+              src="/assets/idenza_logo.png"
+              alt="Idenza Logo"
+              style={{
+                width: 40,
+                height: 40,
+                objectFit: "contain",
+                borderRadius: "6px",
+              }}
+            />
 
-    {/* Subheading */}
-    <p
-      style={{
-        margin: "6px 0 0 52px",
-        fontSize: 13,
-        opacity: 0.92,
-        fontWeight: 400,
-      }}
-    >
-      Unified intelligence across approvals, fraud risk, 3DS policy, and VAMP-aligned performance.
-    </p>
-  </div>
+            <h2
+              style={{
+                margin: 0,
+                fontSize: 21,
+                fontWeight: 700,
+                letterSpacing: "0.01em",
+              }}
+            >
+              Idenza Risk &amp; Payments Command Center
+            </h2>
+          </div>
 
-  {/* Right: Tenant + status */}
-  <div
-    style={{
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "flex-end",
-      gap: 6,
-      fontSize: 12,
-    }}
-  >
-    {/* Tenant / subscriber pill */}
-    <div
-      style={{
-        padding: "5px 12px",
-        borderRadius: "999px",
-        backgroundColor: "rgba(255,255,255,0.14)",
-        border: "1px solid rgba(255,255,255,0.25)",
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-      }}
-    >
-      <span
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: "999px",
-          backgroundColor: "#22C55E", // green indicator
-        }}
-      />
-      <span style={{ fontWeight: 500, color: "#F8FAFC" }}>
-        {SUBSCRIBER_LABEL}
-      </span>
-    </div>
+          {/* Subheading */}
+          <p
+            style={{
+              margin: "6px 0 0 52px",
+              fontSize: 13,
+              opacity: 0.92,
+              fontWeight: 400,
+            }}
+          >
+            Unified intelligence across approvals, fraud risk, 3DS policy, and
+            VAMP-aligned performance.
+          </p>
+        </div>
 
-    {/* Last updated + auto-refresh */}
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        color: "#E0E7FF",
-      }}
-    >
-      <span>
-        Last updated:{" "}
-        <strong>
-          {lastUpdated ? lastUpdated.toLocaleTimeString() : "Loading…"}
-        </strong>
-      </span>
+        {/* Right: Tenant + status */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-end",
+            gap: 6,
+            fontSize: 12,
+          }}
+        >
+          {/* Tenant / subscriber pill */}
+          <div
+            style={{
+              padding: "5px 12px",
+              borderRadius: "999px",
+              backgroundColor: "rgba(255,255,255,0.14)",
+              border: "1px solid rgba(255,255,255,0.25)",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "999px",
+                backgroundColor: "#22C55E", // green indicator
+              }}
+            />
+            <span style={{ fontWeight: 500, color: "#F8FAFC" }}>
+              {SUBSCRIBER_LABEL}
+            </span>
+          </div>
 
-      <span
-        style={{
-          padding: "2px 9px",
-          borderRadius: "999px",
-          backgroundColor: autoRefresh
-            ? "rgba(34,197,94,0.20)"
-            : "rgba(148,163,184,0.25)",
-          border: `1px solid ${
-            autoRefresh ? "rgba(34,197,94,0.7)" : "rgba(148,163,184,0.6)"
-          }`,
-          fontSize: 11,
-          fontWeight: 600,
-        }}
-      >
-        Auto-refresh:{" "}
-        <span style={{ fontWeight: 700 }}>
-          {autoRefresh ? "ON" : "OFF"}
-        </span>
-      </span>
-    </div>
-  </div>
-</header>
+          {/* Last updated + auto-refresh */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              color: "#E0E7FF",
+            }}
+          >
+            <span>
+              Last updated:{" "}
+              <strong>
+                {lastUpdated ? lastUpdated.toLocaleTimeString() : "Loading…"}
+              </strong>
+            </span>
 
-
-
-
+            <span
+              style={{
+                padding: "2px 9px",
+                borderRadius: "999px",
+                backgroundColor: autoRefresh
+                  ? "rgba(34,197,94,0.20)"
+                  : "rgba(148,163,184,0.25)",
+                border: `1px solid ${
+                  autoRefresh ? "rgba(34,197,94,0.7)" : "rgba(148,163,184,0.6)"
+                }`,
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              Auto-refresh:{" "}
+              <span style={{ fontWeight: 700 }}>
+                {autoRefresh ? "ON" : "OFF"}
+              </span>
+            </span>
+          </div>
+        </div>
+      </header>
 
       <Container fluid>
         {/* Controls row */}
@@ -831,66 +744,65 @@ export default function AnalyticsDashboard({
         </Row>
 
         {/* KPI Strip */}
-       {/* ===== KPI Strip ===== */}
-<Row className="mb-4" style={{ gap: "14px 0" }}>
-  <Col lg={3} md={6} sm={6}>
-    <KpiCard
-      label="High Risk Rate"
-      value={highRiskRate}
-      sublabel="Traffic classified as HIGH"
-      icon="⚠️"
-      accent="#EF4444"
-    />
-  </Col>
+        {/* ===== KPI Strip ===== */}
+        <Row className="mb-4" style={{ gap: "14px 0" }}>
+          <Col lg={3} md={6} sm={6}>
+            <KpiCard
+              label="High Risk Rate"
+              value={highRiskRate}
+              sublabel="Traffic classified as HIGH"
+              icon="⚠️"
+              accent="#EF4444"
+            />
+          </Col>
 
-  <Col lg={3} md={6} sm={6}>
-    <KpiCard
-      label="Refund / Dispute Rate"
-      value={refundRate}
-      sublabel="From VAMP analytics"
-      icon="💸"
-      accent="#F97316"
-    />
-  </Col>
+          <Col lg={3} md={6} sm={6}>
+            <KpiCard
+              label="Refund / Dispute Rate"
+              value={refundRate}
+              sublabel="From VAMP analytics"
+              icon="💸"
+              accent="#F97316"
+            />
+          </Col>
 
-  <Col lg={3} md={6} sm={6}>
-    <KpiCard
-      label="Force 3DS Rate"
-      value={force3dsRate}
-      sublabel="Policy: FORCE_ON"
-      icon="🔐"
-      accent="#3B82F6"
-    />
-  </Col>
+          <Col lg={3} md={6} sm={6}>
+            <KpiCard
+              label="Force 3DS Rate"
+              value={force3dsRate}
+              sublabel="Policy: FORCE_ON"
+              icon="🔐"
+              accent="#3B82F6"
+            />
+          </Col>
 
-  <Col lg={3} md={6} sm={6}>
-    <KpiCard
-      label="Scoring → Deposit"
-      value={avgLatency}
-      sublabel="Mean scoring-to-deposit latency"
-      icon="⏱️"
-      accent="#10B981"
-    />
-  </Col>
-</Row>
+          <Col lg={3} md={6} sm={6}>
+            <KpiCard
+              label="Scoring → Deposit"
+              value={avgLatency}
+              sublabel="Mean scoring-to-deposit latency"
+              icon="⏱️"
+              accent="#10B981"
+            />
+          </Col>
+        </Row>
 
-{/* SECOND ROW OF KPIs */}
-<Row className="mb-4" style={{ gap: "14px 0" }}>
-  <Col lg={3} md={6} sm={6}>
-    <KpiCard
-      label="Scoring Time"
-      value={
-        timingTotalStats
-          ? `${timingTotalStats.mean.toFixed(2)} ms`
-          : "-"
-      }
-      sublabel="Average scoring evaluation time"
-      icon="🧠"
-      accent="#8B5CF6"
-    />
-  </Col>
-</Row>
-
+        {/* SECOND ROW OF KPIs */}
+        <Row className="mb-4" style={{ gap: "14px 0" }}>
+          <Col lg={3} md={6} sm={6}>
+            <KpiCard
+              label="Scoring Time"
+              value={
+                timingTotalStats
+                  ? `${timingTotalStats.mean.toFixed(2)} ms`
+                  : "-"
+              }
+              sublabel="Average scoring evaluation time"
+              icon="🧠"
+              accent="#8B5CF6"
+            />
+          </Col>
+        </Row>
 
         {/* MAIN GRID LAYOUT */}
         <Row>
@@ -937,6 +849,7 @@ export default function AnalyticsDashboard({
                       and Idenza&apos;s Force / Prefer / Bypass 3DS policy
                       recommendations based on risk and rule hits.
                     </p>
+
                     <ThreeDSAnalytics data={threeDSData} loading={loading} />
                   </Col>
                 </Row>
@@ -1026,8 +939,8 @@ export default function AnalyticsDashboard({
                 </Row>
 
                 {/* THIRD: ORDERS / VOLUME */}
-                <Row>
-                  <Col lg={12}>
+                <Row className="mx-0">
+                  <Col xs={12} className="px-0">
                     <h6 style={{ fontWeight: 600, marginBottom: 8 }}>
                       Volume & Orders
                     </h6>
@@ -1041,11 +954,13 @@ export default function AnalyticsDashboard({
                     >
                       Deposits, refunds, and withdrawals across orders
                     </p>
+
                     {loading ? (
                       <SpinnerWrapper />
                     ) : (
                       <OrdersAnalytics data={ordersData} loading={loading} />
                     )}
+
                     <div
                       style={{
                         fontSize: 12,
